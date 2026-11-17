@@ -1,14 +1,16 @@
 <?php
 require_once __DIR__ . '/../includes/bootstrap.php';
+require_once __DIR__ . '/../lib/CredentialsMail.php';
 require_login(['admin']);
 $pageTitle = 'Create user'; $pageSub = 'Add a veterinarian or another administrator'; $active = 'create_user';
 
 $errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
-    $name = post('full_name'); $user = post('username'); $pw = $_POST['password'] ?? ''; $role = post('role', 'user');
+    $name = post('full_name'); $user = strtolower(post('username')); $pw = $_POST['password'] ?? ''; $role = post('role', 'user');
     if ($name === '') $errors[] = 'Full name is required.';
-    if ($user === '') $errors[] = 'Username is required.';
+    if ($user === '') $errors[] = 'Username (email) is required.';
+    elseif (!filter_var($user, FILTER_VALIDATE_EMAIL)) $errors[] = 'Username must be a valid email address (e.g. name@example.com).';
     if (!valid_phone(post('phone'))) $errors[] = 'Telephone number must be exactly 10 digits.';
     if (strlen($pw) < 8) $errors[] = 'Password must be at least 8 characters.';
     if ($pw !== ($_POST['confirm'] ?? '')) $errors[] = 'Passwords do not match.';
@@ -18,7 +20,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         q("INSERT INTO users (full_name, designation, company, phone, username, password_hash, role) VALUES (?,?,?,?,?,?,?)",
           [$name, nz(post('designation')), nz(post('company')), nz(post('phone')), $user, password_hash($pw, PASSWORD_DEFAULT), $role]);
         log_activity('user', "Created $role account for $name");
-        flash('success', "$name can now sign in as $user.");
+
+        // Email the credentials right away (the user is already saved, so a mail failure does not undo it)
+        [$sent, $mailErr] = send_credentials_email($user, $name, $user, $pw, null, $role);
+        if ($sent) flash('success', "$name's account was created and the login details were emailed to $user.");
+        else flash('error', "$name's account was created ($user), but the email could not be sent: $mailErr");
         redirect('admin/manage_users.php');
     }
 }
@@ -32,11 +38,11 @@ include __DIR__ . '/../includes/header.php';
     <div class="col-md-6"><label class="form-label">Designation</label><input class="form-control" name="designation" value="<?= h(post('designation')) ?>"></div>
     <div class="col-md-6"><label class="form-label">Company</label><input class="form-control" name="company" value="<?= h(post('company')) ?>"></div>
     <div class="col-md-6"><label class="form-label">Telephone number</label><input class="form-control" name="phone" inputmode="numeric" maxlength="10" placeholder="10 digits" value="<?= h(post('phone')) ?>"></div>
-    <div class="col-md-6"><label class="form-label">Username</label><input class="form-control" name="username" required autocomplete="off" value="<?= h(post('username')) ?>"></div>
+    <div class="col-md-6"><label class="form-label">Username (enter a valid email)</label><input class="form-control" type="email" name="username" placeholder="name@example.com" required autocomplete="off" value="<?= h(post('username')) ?>"><div class="form-text">The login details will be emailed to this address.</div></div>
     <div class="col-md-6"><label class="form-label">Role</label><select class="form-select" name="role"><option value="user" <?= post('role') !== 'admin' ? 'selected' : '' ?>>User (veterinarian)</option><option value="admin" <?= post('role') === 'admin' ? 'selected' : '' ?>>Admin</option></select></div>
-    <div class="col-md-6"><label class="form-label">Password</label><input class="form-control" type="password" name="password" minlength="8" required autocomplete="new-password"><div class="form-text">At least 8 characters.</div></div>
+    <div class="col-md-6"><label class="form-label">Password</label><input class="form-control" type="password" name="password" minlength="8" required autocomplete="new-password"><div class="form-text">At least 8 characters. It will be included in the email.</div></div>
     <div class="col-md-6"><label class="form-label">Confirm password</label><input class="form-control" type="password" name="confirm" required autocomplete="new-password"></div>
   </div>
-  <button class="btn btn-vs mt-4 px-4" type="submit"><i class="bi bi-person-plus"></i> Save user</button>
+  <button class="btn btn-vs mt-4 px-4" type="submit"><i class="bi bi-person-plus"></i> Save user &amp; email credentials</button>
 </form>
 <?php include __DIR__ . '/../includes/footer.php';
